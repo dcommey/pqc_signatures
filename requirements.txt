@@ -1,0 +1,7 @@
+pqcrypto
+numpy
+pandas
+matplotlib
+seaborn
+memory_profiler
+web3
