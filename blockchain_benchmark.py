@@ -47,10 +47,14 @@ class BlockchainPQCBenchmark:
         }
     
     def measure_blockchain_overhead(self, scheme, message: bytes, keys, signature):
-        """Measure blockchain-specific overheads"""
+        """
+        Measure blockchain-specific overheads using placeholder verification.
+        NOTE: The contract functions only simulate the transaction cost of sending
+              PQC data, they DO NOT perform actual PQC verification on-chain.
+        """
         pub_key, priv_key = keys
         
-        # Measure base transaction
+        # Measure base transaction (simple value transfer) to estimate baseline gas/time
         start_time = time.time()
         tx_hash = self.w3.eth.send_transaction({
             'from': self.account,
@@ -62,46 +66,70 @@ class BlockchainPQCBenchmark:
         base_tx_time = (time.time() - start_time) * 1000
         base_gas = receipt['gasUsed']
         
-        # Measure verification on blockchain
+        # Measure verification transaction on blockchain (calling placeholder function)
         scheme_name = scheme.get_name().lower()
-        if 'mldsa' in scheme_name:
+        # Select the corresponding placeholder function in the contract
+        if 'mldsa' in scheme_name or 'dilithium' in scheme_name: # Match ML-DSA name
             verify_func = self.contract.functions.verifyDilithium
         elif 'falcon' in scheme_name:
             verify_func = self.contract.functions.verifyFalconPadded
-        else:
+        elif 'sphincs' in scheme_name: # Match SPHINCS+ name
             verify_func = self.contract.functions.verifySphincsPlus
+        else:
+             raise ValueError(f"Unknown scheme name for contract function mapping: {scheme.get_name()}")
             
         start_time = time.time()
         
-        # Estimate gas with safety margin
-        gas_estimate = verify_func(
-            message,
-            signature,
-            pub_key
-        ).estimate_gas({'from': self.account}) * 2
-        
+        # Estimate gas with a safety margin.
+        # This is necessary because exact gas cost can vary slightly, and complex
+        # operations (even placeholders here) might exceed default block gas limits
+        # without an explicit higher limit. The multiplier (e.g., 1.5 or 2) helps
+        # prevent out-of-gas errors during benchmarking, but might overestimate slightly.
+        # Actual on-chain PQC verification would likely require much higher gas limits.
+        try:
+            gas_estimate = verify_func(
+                message,
+                signature,
+                pub_key
+            ).estimate_gas({'from': self.account}) * 2 # Using a multiplier as safety margin
+        except Exception as e:
+             print(f"Gas estimation failed for {scheme.get_name()} (size {len(message)}): {e}. Using fallback high gas limit.")
+             # Fallback to a very high limit if estimation fails (adjust as needed)
+             gas_estimate = 80_000_000 
+
+        # Ensure gas estimate doesn't exceed Ganache's block limit (set in launch_ganache.sh)
+        block_gas_limit = 100_000_000 # Match Ganache config or query w3.eth.getBlock('latest').gasLimit
+        if gas_estimate > block_gas_limit:
+             print(f"Warning: Estimated gas {gas_estimate} exceeds block limit {block_gas_limit}. Capping at limit.")
+             gas_estimate = block_gas_limit
+
         tx_hash = verify_func(
             message,
             signature,
             pub_key
         ).transact({
             'from': self.account,
-            'gas': gas_estimate
+            'gas': gas_estimate # Use estimated gas with margin
         })
         
         receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash)
         blockchain_verify_time = (time.time() - start_time) * 1000
         
-        sig_data_size = len(signature) + len(pub_key)
+        # Calculate verification-specific gas (total gas - base gas)
+        # Note: This is an approximation, as the base transaction is simpler.
         verification_gas = receipt['gasUsed'] - base_gas
+        if verification_gas < 0: # Ensure non-negative gas
+             verification_gas = 0 
         
+        sig_data_size = len(signature) + len(pub_key) # Size of data relevant to verification tx
+
         return {
             'base_transaction_time_ms': base_tx_time,
             'base_transaction_gas': base_gas,
             'blockchain_verification_time_ms': blockchain_verify_time,
-            'verification_gas': verification_gas,
-            'signature_data_size': sig_data_size,
-            'total_gas': receipt['gasUsed']
+            'verification_gas': verification_gas, # Gas attributed specifically to the verify call
+            'signature_data_size': sig_data_size, # Size of signature + pubkey
+            'total_gas': receipt['gasUsed'] # Total gas for the verification transaction
         }
 
     def benchmark_scheme(self, scheme, message_sizes=[32, 1024, 32*1024, 128*1024, 1024*1024], iterations=50):

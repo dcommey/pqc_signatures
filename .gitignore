@@ -3,18 +3,31 @@ __pycache__/
 *.py[cod]
 *$py.class
 
-# Virtual environment
-venv/
-.env/
+# C extensions
+*.so
 
-# Build artifacts
+# Distribution / packaging
 build/
 dist/
 *.egg-info/
 
-# OS files
+# Virtual environment
+venv/
+.env/
+env/
+ENV/
+
+# Results and generated data
+results/
+keys.json
+
+# Truffle and blockchain artifacts
+build/
+
+# Editor configs
+.vscode/
+.idea/
+
+# OS specific files
 .DS_Store
 Thumbs.db
-
-# Results
-results/

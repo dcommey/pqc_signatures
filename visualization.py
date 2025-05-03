@@ -31,12 +31,25 @@ class PQCVisualizer:
         message_sizes = []
         schemes = []
         
+        # Ensure consistent order for message sizes if needed, e.g., by sorting keys
+        all_sizes = set()
+        for scheme_data in self.results.values():
+            for key in scheme_data['measurements'].keys():
+                size = int(key.split('_')[-1])
+                all_sizes.add(size)
+        
+        sorted_sizes = sorted(list(all_sizes))
+        size_map = {size: self._format_size(size) for size in sorted_sizes}
+        ordered_size_labels = [size_map[size] for size in sorted_sizes]
+
         for scheme_name, scheme_data in self.results.items():
-            for key, measurement in scheme_data['measurements'].items():
+            # Sort measurements by size to ensure consistency
+            sorted_measurements = sorted(scheme_data['measurements'].items(), key=lambda item: int(item[0].split('_')[-1]))
+            for key, measurement in sorted_measurements:
                 size = int(key.split('_')[-1])
                 pure_times.append(measurement['pure_crypto']['pure_verification_time_ms'])
                 blockchain_times.append(measurement['blockchain_overhead']['blockchain_verification_time_ms'])
-                message_sizes.append(self._format_size(size))
+                message_sizes.append(size_map[size]) # Use formatted size
                 schemes.append(scheme_name)
         
         df = pd.DataFrame({
@@ -46,15 +59,18 @@ class PQCVisualizer:
             'Blockchain Verification (ms)': blockchain_times
         })
         
+        # Ensure the plot uses the sorted order of message sizes
+        df['Message Size'] = pd.Categorical(df['Message Size'], categories=ordered_size_labels, ordered=True)
+
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
         
         sns.barplot(data=df, x='Message Size', y='Pure Verification (ms)', 
-                   hue='Scheme', ax=ax1)
+                   hue='Scheme', ax=ax1, order=ordered_size_labels) # Specify order
         ax1.set_title('Pure Verification Time')
         ax1.tick_params(axis='x', rotation=45)
         
         sns.barplot(data=df, x='Message Size', y='Blockchain Verification (ms)', 
-                   hue='Scheme', ax=ax2)
+                   hue='Scheme', ax=ax2, order=ordered_size_labels) # Specify order
         ax2.set_title('Blockchain Verification Time')
         ax2.tick_params(axis='x', rotation=45)
         
@@ -68,16 +84,24 @@ class PQCVisualizer:
         verify_gas = []
         sig_sizes = []
         
+        # Use a specific, common message size for comparison (e.g., 1024 bytes)
+        target_size_key = 'message_size_1024' 
+
         for scheme_name, scheme_data in self.results.items():
-            # Take measurements from middle message size
-            mid_size_key = list(scheme_data['measurements'].keys())[2]
-            measurement = scheme_data['measurements'][mid_size_key]
-            
-            scheme_names.append(scheme_name)
-            base_gas.append(measurement['blockchain_overhead']['base_transaction_gas'])
-            verify_gas.append(measurement['blockchain_overhead']['verification_gas'])
-            sig_sizes.append(measurement['pure_crypto']['signature_size'])
-        
+            if target_size_key in scheme_data['measurements']:
+                measurement = scheme_data['measurements'][target_size_key]
+                
+                scheme_names.append(scheme_name)
+                base_gas.append(measurement['blockchain_overhead']['base_transaction_gas'])
+                verify_gas.append(measurement['blockchain_overhead']['verification_gas'])
+                sig_sizes.append(measurement['pure_crypto']['signature_size'])
+            else:
+                print(f"Warning: Data for message size 1024 not found for scheme {scheme_name}. Skipping in gas analysis plot.")
+
+        if not scheme_names: # Check if any data was found
+             print("Error: No data found for message size 1024 for any scheme. Cannot generate gas analysis plot.")
+             return
+
         fig, ax1 = plt.subplots(figsize=(10, 6))
         
         # Plot stacked bars
@@ -104,44 +128,55 @@ class PQCVisualizer:
         handles2, labels2 = ax2.get_legend_handles_labels()
         ax1.legend(handles1 + handles2, labels1 + labels2, loc='upper left')
         
-        plt.title('Gas Usage and Signature Size Comparison')
+        plt.title('Gas Usage and Signature Size Comparison (Message Size: 1KB)')
         plt.tight_layout()
         plt.savefig('results/gas_analysis.pdf', dpi=300, bbox_inches='tight')
         plt.close()
 
     def create_latex_tables(self):
+        # Use a specific, common message size for comparison (e.g., 1024 bytes)
+        target_size_key = 'message_size_1024' 
+        
         # Table 1: Core Cryptographic Performance
-        crypto_table = """\\begin{table}[h]
+        crypto_table = f"""\\begin{{table}}[h]
 \\centering
-\\caption{Core Cryptographic Performance Metrics}
-\\label{tab:crypto_perf}
-\\begin{tabular}{lcccc}
+\\caption{{Core Cryptographic Performance Metrics (Message Size: 1KB)}} % Updated Caption
+\\label{{tab:crypto_perf}}
+\\begin{{tabular}}{{lcccc}}
 \\toprule
 Scheme & Key Gen (ms) & Sign (ms) & Verify (ms) & Sig Size (B) \\\\
 \\midrule
 """
         
         for scheme_name, scheme_data in self.results.items():
-            mid_size_key = list(scheme_data['measurements'].keys())[2]
-            measurement = scheme_data['measurements'][mid_size_key]['pure_crypto']
-            
-            crypto_table += f"{scheme_name} & "
-            crypto_table += f"{measurement['key_generation_time_ms']:.2f} & "
-            crypto_table += f"{measurement['signing_time_ms']:.2f} & "
-            crypto_table += f"{measurement['pure_verification_time_ms']:.2f} & "
-            crypto_table += f"{measurement['signature_size']} \\\\\n"
-        
+            # Keygen is independent of message size, take from any measurement if available
+            keygen_time = "N/A" 
+            if scheme_data['measurements']:
+                 # Find the first available measurement for keygen time (should be consistent)
+                 first_measurement = next(iter(scheme_data['measurements'].values()))
+                 keygen_time = f"{first_measurement['pure_crypto']['key_generation_time_ms']:.2f}"
+
+            if target_size_key in scheme_data['measurements']:
+                measurement = scheme_data['measurements'][target_size_key]['pure_crypto']
+                crypto_table += f"{scheme_name} & "
+                crypto_table += f"{keygen_time} & " # Use fetched keygen time
+                crypto_table += f"{measurement['signing_time_ms']:.2f} & "
+                crypto_table += f"{measurement['pure_verification_time_ms']:.2f} & "
+                crypto_table += f"{measurement['signature_size']} \\\\\n"
+            else:
+                 print(f"Warning: Data for message size 1024 not found for scheme {scheme_name}. Skipping in crypto table.")
+
         crypto_table += """\\bottomrule
 \\end{tabular}
 \\end{table}
 """
 
         # Table 2: Blockchain Integration Overhead
-        overhead_table = """\\begin{table}[h]
+        overhead_table = f"""\\begin{{table}}[h]
 \\centering
-\\caption{Blockchain Integration Overhead}
-\\label{tab:blockchain_overhead}
-\\begin{tabular}{lcccc}
+\\caption{{Simulated Blockchain Integration Overhead (Message Size: 1KB)}} % Updated Caption
+\\label{{tab:blockchain_overhead}}
+\\begin{{tabular}}{{lcccc}}
 \\toprule
 Scheme & Verification & Gas & Gas/Byte & Overhead \\\\
 & Time (ms) & Used & Ratio & Ratio \\\\
@@ -149,22 +184,37 @@ Scheme & Verification & Gas & Gas/Byte & Overhead \\\\
 """
         
         for scheme_name, scheme_data in self.results.items():
-            mid_size_key = list(scheme_data['measurements'].keys())[2]
-            measurement = scheme_data['measurements'][mid_size_key]
-            
-            overhead_table += f"{scheme_name} & "
-            overhead_table += f"{measurement['blockchain_overhead']['blockchain_verification_time_ms']:.2f} & "
-            overhead_table += f"{int(measurement['blockchain_overhead']['total_gas']):,} & "
-            overhead_table += f"{measurement['blockchain_overhead']['gas_per_byte']:.1f} & "
-            overhead_table += f"{measurement['blockchain_overhead']['verification_overhead_ratio']:.2f}x \\\\\n"
-        
+             if target_size_key in scheme_data['measurements']:
+                measurement = scheme_data['measurements'][target_size_key]
+                overhead_data = measurement['blockchain_overhead']
+                crypto_data = measurement['pure_crypto']
+                
+                # Calculate ratios safely, handle potential division by zero
+                overhead_ratio = "N/A"
+                if crypto_data['pure_verification_time_ms'] > 0:
+                    overhead_ratio = f"{overhead_data['blockchain_verification_time_ms'] / crypto_data['pure_verification_time_ms']:.2f}x"
+
+                gas_per_byte = "N/A"
+                if crypto_data['signature_size'] > 0:
+                     gas_per_byte = f"{overhead_data['total_gas'] / crypto_data['signature_size']:.1f}"
+
+                overhead_table += f"{scheme_name} & "
+                overhead_table += f"{overhead_data['blockchain_verification_time_ms']:.2f} & "
+                overhead_table += f"{int(overhead_data['total_gas']):,} & "
+                overhead_table += f"{gas_per_byte} & " # Use calculated gas/byte
+                overhead_table += f"{overhead_ratio} \\\\\n" # Use calculated overhead ratio
+             else:
+                 print(f"Warning: Data for message size 1024 not found for scheme {scheme_name}. Skipping in overhead table.")
+
         overhead_table += """\\bottomrule
 \\end{tabular}
 \\end{table}
 """
 
         # Save tables
-        with open('results/tables.tex', 'w') as f:
+        results_dir = Path('results')
+        results_dir.mkdir(exist_ok=True) # Ensure results dir exists
+        with open(results_dir / 'tables.tex', 'w') as f:
             f.write(crypto_table)
             f.write('\n')
             f.write(overhead_table)
