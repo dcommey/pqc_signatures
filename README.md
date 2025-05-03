@@ -58,13 +58,13 @@ D. Commey, S. G. Hounsinou and G. V. Crosby, "Post-Quantum Secure Blockchain-Bas
         chmod +x launch_ganache.sh
         ./launch_ganache.sh
         ```
-        This script also generates `keys.json` (ensure it's gitignored).
+        This script also generates `keys.json`.
     *   Compile and deploy the placeholder contract:
         ```bash
         truffle compile
         truffle migrate --network development
         ```
-        This will create the `build/` directory (ensure it's gitignored).
+        This will create the `build/` directory.
 6.  **Run Benchmarks:**
     ```bash
     python blockchain_benchmark.py # Runs both crypto and blockchain benchmarks
